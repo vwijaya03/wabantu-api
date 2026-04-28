@@ -1,0 +1,47 @@
+# =====================================================================
+# WABantu API — standalone deployment
+#
+# Bring up:    cd api && docker compose up -d --build
+# Logs:        docker compose logs -f api
+# Tear down:   docker compose down
+#
+# Prerequisite: the shared `wabantu_net` network must already exist.
+# Create it by starting infra first:
+#   cd ../infra && docker compose up -d
+# =====================================================================
+
+name: wabantu-api
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: wabantu-api:local
+    container_name: wabantu-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    # Override host-style values from .env so the container talks to the
+    # infra services by their docker network names instead of localhost.
+    # Anything explicitly set in `.env` still wins via env_file precedence.
+    environment:
+      SYSTEM_DB_HOST: ${SYSTEM_DB_HOST:-postgres}
+      TENANT_DB_HOST: ${TENANT_DB_HOST:-postgres}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      APP_PORT: ${APP_PORT:-3001}
+    ports:
+      - "${APP_PORT:-3001}:3001"
+    networks:
+      - wabantu_net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+networks:
+  wabantu_net:
+    name: wabantu_net
+    external: true

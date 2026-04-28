@@ -1,98 +1,155 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# WABantu API
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+NestJS 11 backend for the WABantu SaaS. Serves a versioned REST API at
+`/api/v1/...` with JWT + Redis session auth and multi-tenant Postgres.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+## Module map
 
-## Description
-
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
-
-## Project setup
-
-```bash
-$ npm install
+```
+src/
+├── main.ts                     # Bootstrap (helmet, CORS, versioning, pipes)
+├── app.module.ts               # Wires every feature module
+├── config/
+│   ├── configuration.ts        # Typed loader (env -> domain shape)
+│   └── env.validation.ts       # Joi schema (fail-fast on bad env)
+├── common/
+│   ├── filters/                # AllExceptionsFilter
+│   ├── interceptors/           # Uniform success envelope
+│   ├── guards/                 # RolesGuard
+│   ├── decorators/             # @Public, @CurrentUser, @Roles
+│   ├── types/                  # AuthUser, AuthenticatedRequest
+│   └── utils/                  # slugify, parseDurationToSeconds
+├── database/
+│   ├── system/                 # jb_system DataSource + entities
+│   │   └── entities/
+│   │       ├── tenant.entity.ts
+│   │       ├── tenant-company.entity.ts
+│   │       └── tenant-account.entity.ts
+│   └── tenant/                 # jb_tenant entities + per-tenant DS resolver
+│       ├── entities/
+│       └── tenant-connection.service.ts
+├── redis/                      # Shared ioredis client
+├── auth/                       # Register, login, logout, JWT, sessions
+├── business/                   # Business profile (per-tenant)
+├── knowledge-base/             # FAQ entries (per-tenant)
+├── whatsapp/                   # Meta Cloud API + webhook
+├── inbox/                      # (entities live in database/tenant)
+└── health/                     # Liveness + readiness
 ```
 
-## Compile and run the project
+## Auth flow
 
-```bash
-# development
-$ npm run start
+```
+POST /auth/register
+  └─ tx in jb_system: insert tenant + tenant_company + tenant_account
+  └─ commit, then bootstrap "t_<slug>" schema in jb_tenant + create
+     placeholder business_profile row
+  └─ create Redis session + sign JWT, return token in HttpOnly cookie
 
-# watch mode
-$ npm run start:dev
+POST /auth/login
+  └─ lookup tenant_account by email, bcrypt-compare password
+  └─ load tenant + tenant_company (tenantSchema)
+  └─ create Redis session, return JWT cookie
 
-# production mode
-$ npm run start:prod
+GET /auth/me   (JwtAuthGuard)
+  └─ JwtStrategy validates JWT signature + Redis session presence
+  └─ touches session TTL (sliding expiration)
+  └─ returns enriched user with tenant info
+
+POST /auth/logout
+  └─ deletes Redis session, clears cookie
 ```
 
-## Run tests
+## Per-tenant data access
 
-```bash
-# unit tests
-$ npm run test
+Every feature service injects `TenantConnectionService`, then:
 
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
+```ts
+const ds = await this.tenantConn.getDataSourceForTenant(user.tenantId);
+const repo = ds.getRepository(BusinessProfile);
+const profile = await repo.findOne({ where: {} });
 ```
 
-## Deployment
+The first call for a given `(host, port, database, schema)` boots a
+TypeORM DataSource and caches it. Connections close on shutdown via
+`OnModuleDestroy`.
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+## Environment variables
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+See `.env.example`. Everything is validated by Joi at boot — the API
+will refuse to start if anything required is missing or malformed.
+
+Required for first run:
+
+- `SYSTEM_DB_*` and `TENANT_DB_*` — point to the same Postgres cluster
+  in dev, and to whatever you want in prod
+- `REDIS_HOST`, `REDIS_PORT`
+- `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET` (≥32 chars; ≥64 in prod)
+
+Optional but recommended:
+
+- `META_WEBHOOK_VERIFY_TOKEN` + `META_APP_SECRET` — for WhatsApp webhook
+- `ANTHROPIC_API_KEY` — when you wire the AI auto-reply pipeline
+
+## Running
+
+### Local (npm)
 
 ```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
+npm run start:dev   # watch mode
+npm run start       # one-shot
+npm run start:prod  # production (after `npm run build`)
+npm run lint        # eslint + prettier
+npm run test        # unit
+npm run test:e2e    # e2e
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+### Docker (standalone deploy unit)
 
-## Resources
+This service ships its own `Dockerfile` and `docker-compose.yml`, so it
+can be built and shipped without any other repo content. The only
+external requirement is the shared `wabantu_net` Docker network created
+by `infra/docker-compose.yml`.
 
-Check out a few resources that may come in handy when working with NestJS:
+```bash
+# Make sure infra is up first (only needed once on a host):
+cd ../infra && docker compose up -d
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+# Build & start the API container:
+cd ../api && docker compose up -d --build
 
-## Support
+# Tail logs:
+docker compose logs -f api
+```
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+Build & push for a registry:
 
-## Stay in touch
+```bash
+docker build -t registry.example.com/wabantu-api:$TAG .
+docker push registry.example.com/wabantu-api:$TAG
+```
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+The compose file overrides `SYSTEM_DB_HOST`/`TENANT_DB_HOST`/`REDIS_HOST`
+to point at the docker service names (`postgres`, `redis`). Your local
+`.env` can keep `localhost` for `npm run start:dev` — both modes work
+from the same `.env` file.
 
-## License
+## Adding a new tenant-scoped entity
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+1. Create the entity in `src/database/tenant/entities/`.
+2. Add the class to `TENANT_ENTITIES` in `src/database/tenant/tenant-entities.ts`.
+3. Build a feature module that injects `TenantConnectionService` and
+   resolves a repository per request via `getDataSourceForTenant()`.
+4. In dev, the next register/login auto-syncs the schema. In prod,
+   ship a migration that runs across every existing tenant schema.
+
+## Adding a new WhatsApp provider
+
+1. Implement `WhatsappProvider` interface in
+   `src/whatsapp/providers/<your-provider>.provider.ts`.
+2. Register it as a Nest provider in `whatsapp.module.ts`.
+3. Inject it into `WhatsappService.providers`.
+4. Update `WHATSAPP_PROVIDER` env enum + Joi schema.
+
+The rest of the codebase (auto-reply pipeline, inbox) talks only to
+the interface — no other file needs changes.
