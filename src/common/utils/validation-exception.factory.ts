@@ -26,7 +26,7 @@ export function validationExceptionFactory(
       message: [
         'Body request kosong atau tidak ter-parse sebagai JSON.',
         'Wajib header: Content-Type: application/json',
-        'Contoh: {"email":"viko_wijaya@yahoo.co.id","password":"KataSandi1","name":"Viko Wijaya","businessName":"Nama Toko"}',
+        'Contoh: {"email":"user@example.com","password":"ExamplePass123","name":"Nama User","businessName":"Nama Toko"}',
         'Nama field harus camelCase: businessName (bukan business_name).',
       ],
     });
