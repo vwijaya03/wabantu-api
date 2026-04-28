@@ -75,6 +75,7 @@ export const envValidationSchema = Joi.object({
     .valid('meta_cloud', 'baileys')
     .default('meta_cloud'),
   META_GRAPH_API_VERSION: Joi.string().default('v20.0'),
+  META_APP_ID: Joi.string().allow('').default(''),
   META_WEBHOOK_VERIFY_TOKEN: Joi.string().allow('').default(''),
   META_APP_SECRET: Joi.string().allow('').default(''),
 

@@ -20,7 +20,8 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
 import type { AuthUser } from '../common/types/request.types';
 import type { WhatsAppConfig } from '../config/configuration';
-import { ConnectChannelDto } from './dto/connect-channel.dto';
+import { MetaConnectCallbackDto } from './dto/meta-connect-callback.dto';
+import { MetaConnectInitDto } from './dto/meta-connect-init.dto';
 import { WhatsappService } from './whatsapp.service';
 
 interface SendTestBody {
@@ -45,9 +46,15 @@ export class WhatsappController {
 
   @UseGuards(RolesGuard)
   @Roles('owner')
-  @Post('channels')
-  connect(@CurrentUser() user: AuthUser, @Body() dto: ConnectChannelDto) {
-    return this.whatsapp.connectChannel(user, dto);
+  @Post('meta/connect/init')
+  initMetaConnect(@CurrentUser() user: AuthUser, @Body() dto: MetaConnectInitDto) {
+    return this.whatsapp.initMetaConnect(user, dto);
+  }
+
+  @Public()
+  @Post('meta/connect/callback')
+  metaConnectCallback(@Body() dto: MetaConnectCallbackDto) {
+    return this.whatsapp.completeMetaConnect(dto);
   }
 
   @UseGuards(RolesGuard)

@@ -68,6 +68,7 @@ export interface ThrottleConfig {
 export interface WhatsAppConfig {
   provider: 'meta_cloud' | 'baileys';
   metaGraphApiVersion: string;
+  metaAppId: string;
   metaWebhookVerifyToken: string;
   metaAppSecret: string;
 }
@@ -192,6 +193,7 @@ export default (): RootConfig => ({
       (process.env.WHATSAPP_PROVIDER as WhatsAppConfig['provider']) ??
       'meta_cloud',
     metaGraphApiVersion: process.env.META_GRAPH_API_VERSION ?? 'v20.0',
+    metaAppId: process.env.META_APP_ID ?? '',
     metaWebhookVerifyToken: process.env.META_WEBHOOK_VERIFY_TOKEN ?? '',
     metaAppSecret: process.env.META_APP_SECRET ?? '',
   },

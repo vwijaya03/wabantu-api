@@ -1,15 +1,38 @@
 import {
   BadRequestException,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import type Redis from 'ioredis';
+import axios from 'axios';
+import { randomBytes } from 'crypto';
 import { TenantConnectionService } from '../database/tenant/tenant-connection.service';
 import { WhatsappChannel } from '../database/tenant/entities/whatsapp-channel.entity';
 import type { AuthUser } from '../common/types/request.types';
+import { REDIS_CLIENT } from '../redis/redis.module';
+import type { WhatsAppConfig } from '../config/configuration';
 import { MetaCloudProvider } from './providers/meta-cloud.provider';
 import type { WhatsappProvider } from './providers/whatsapp-provider.interface';
-import type { ConnectChannelDto } from './dto/connect-channel.dto';
+import type { MetaConnectInitDto } from './dto/meta-connect-init.dto';
+import type { MetaConnectCallbackDto } from './dto/meta-connect-callback.dto';
+
+interface MetaOauthStatePayload {
+  tenantId: string;
+  userId: string;
+  redirectUri: string;
+}
+
+interface ChannelConnectPayload {
+  provider: 'meta_cloud' | 'baileys';
+  displayName: string;
+  phoneNumber: string;
+  accessToken?: string;
+  metaPhoneNumberId?: string;
+  metaWabaId?: string;
+}
 
 @Injectable()
 export class WhatsappService {
@@ -18,10 +41,16 @@ export class WhatsappService {
     'meta_cloud' | 'baileys',
     WhatsappProvider | null
   >;
+  private readonly graphVersion: string;
+  private readonly appId: string;
+  private readonly appSecret: string;
+  private readonly oauthStateTtlSeconds = 10 * 60;
 
   constructor(
     private readonly tenantConn: TenantConnectionService,
     metaCloud: MetaCloudProvider,
+    @Inject(REDIS_CLIENT) private readonly redis: Redis,
+    config: ConfigService,
   ) {
     this.providers = {
       meta_cloud: metaCloud,
@@ -29,10 +58,18 @@ export class WhatsappService {
       // explicit so the rest of the code can stay provider-agnostic.
       baileys: null,
     };
+    const wa = config.getOrThrow<WhatsAppConfig>('whatsapp');
+    this.graphVersion = wa.metaGraphApiVersion;
+    this.appId = wa.metaAppId;
+    this.appSecret = wa.metaAppSecret;
   }
 
   private async repo(user: AuthUser) {
-    const ds = await this.tenantConn.getDataSourceForTenant(user.tenantId);
+    return this.repoByTenantId(user.tenantId);
+  }
+
+  private async repoByTenantId(tenantId: string) {
+    const ds = await this.tenantConn.getDataSourceForTenant(tenantId);
     return ds.getRepository(WhatsappChannel);
   }
 
@@ -41,23 +78,10 @@ export class WhatsappService {
     return repo.find({ order: { createdAt: 'ASC' } });
   }
 
-  async connectChannel(
-    user: AuthUser,
-    dto: ConnectChannelDto,
+  private async upsertConnectedChannel(
+    repo: Awaited<ReturnType<WhatsappService['repoByTenantId']>>,
+    dto: ChannelConnectPayload,
   ): Promise<WhatsappChannel> {
-    const provider = this.providers[dto.provider];
-    if (!provider) {
-      throw new BadRequestException(`Provider belum tersedia: ${dto.provider}`);
-    }
-    if (dto.provider === 'meta_cloud') {
-      if (!dto.accessToken || !dto.metaPhoneNumberId) {
-        throw new BadRequestException(
-          'Meta Cloud API perlu accessToken dan metaPhoneNumberId',
-        );
-      }
-    }
-
-    const repo = await this.repo(user);
     const existing = await repo.findOne({
       where: { phoneNumber: dto.phoneNumber },
     });
@@ -86,6 +110,83 @@ export class WhatsappService {
       connectedAt: new Date(),
     });
     return repo.save(channel);
+  }
+
+  async initMetaConnect(user: AuthUser, dto: MetaConnectInitDto) {
+    if (!this.appId || !this.appSecret) {
+      throw new BadRequestException(
+        'META_APP_ID dan META_APP_SECRET wajib diisi untuk flow OAuth Meta',
+      );
+    }
+    const state = randomBytes(24).toString('hex');
+    const key = this.oauthStateKey(state);
+    const payload: MetaOauthStatePayload = {
+      tenantId: user.tenantId,
+      userId: user.userId,
+      redirectUri: dto.redirectUri,
+    };
+    await this.redis.set(
+      key,
+      JSON.stringify(payload),
+      'EX',
+      this.oauthStateTtlSeconds,
+    );
+
+    const scopes = [
+      'whatsapp_business_messaging',
+      'whatsapp_business_management',
+      'business_management',
+    ];
+    const oauthUrl = new URL(
+      `https://www.facebook.com/${this.graphVersion}/dialog/oauth`,
+    );
+    oauthUrl.searchParams.set('client_id', this.appId);
+    oauthUrl.searchParams.set('redirect_uri', dto.redirectUri);
+    oauthUrl.searchParams.set('state', state);
+    oauthUrl.searchParams.set('scope', scopes.join(','));
+    oauthUrl.searchParams.set('response_type', 'code');
+
+    return {
+      state,
+      oauthUrl: oauthUrl.toString(),
+      expiresInSeconds: this.oauthStateTtlSeconds,
+    };
+  }
+
+  async completeMetaConnect(dto: MetaConnectCallbackDto): Promise<WhatsappChannel> {
+    const key = this.oauthStateKey(dto.state);
+    const raw = await this.redis.get(key);
+    if (!raw) {
+      throw new BadRequestException(
+        'State OAuth invalid/expired. Ulangi proses connect WhatsApp.',
+      );
+    }
+    await this.redis.del(key);
+
+    let payload: MetaOauthStatePayload;
+    try {
+      payload = JSON.parse(raw) as MetaOauthStatePayload;
+    } catch {
+      throw new BadRequestException('State OAuth tidak valid');
+    }
+    if (!payload.tenantId || !payload.userId || !payload.redirectUri) {
+      throw new BadRequestException('State OAuth tidak lengkap');
+    }
+
+    const accessToken = await this.exchangeMetaCodeForToken(
+      dto.code,
+      payload.redirectUri,
+    );
+
+    const repo = await this.repoByTenantId(payload.tenantId);
+    return this.upsertConnectedChannel(repo, {
+      provider: 'meta_cloud',
+      displayName: dto.displayName,
+      phoneNumber: dto.phoneNumber,
+      accessToken,
+      metaPhoneNumberId: dto.metaPhoneNumberId,
+      metaWabaId: dto.metaWabaId,
+    });
   }
 
   async disconnect(
@@ -129,5 +230,43 @@ export class WhatsappService {
       },
       { to, body },
     );
+  }
+
+  private oauthStateKey(state: string): string {
+    return `whatsapp:meta:oauth:${state}`;
+  }
+
+  private async exchangeMetaCodeForToken(
+    code: string,
+    redirectUri: string,
+  ): Promise<string> {
+    if (!this.appId || !this.appSecret) {
+      throw new BadRequestException(
+        'META_APP_ID dan META_APP_SECRET wajib diisi untuk token exchange',
+      );
+    }
+    const url = new URL(
+      `https://graph.facebook.com/${this.graphVersion}/oauth/access_token`,
+    );
+    url.searchParams.set('client_id', this.appId);
+    url.searchParams.set('client_secret', this.appSecret);
+    url.searchParams.set('redirect_uri', redirectUri);
+    url.searchParams.set('code', code);
+
+    try {
+      const res = await axios.get<{ access_token?: string }>(url.toString(), {
+        timeout: 15_000,
+      });
+      const token = res.data.access_token;
+      if (!token) {
+        throw new Error('Meta did not return access_token');
+      }
+      return token;
+    } catch (error) {
+      this.logger.error('Meta token exchange failed', error);
+      throw new BadRequestException(
+        'Gagal menukar authorization code ke access token Meta',
+      );
+    }
   }
 }

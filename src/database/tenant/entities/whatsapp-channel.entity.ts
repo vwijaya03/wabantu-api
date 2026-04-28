@@ -6,6 +6,7 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
+import { encryptedStringTransformer } from '../../../common/utils/data-crypto.util';
 
 /**
  * One WhatsApp number connected to this tenant.
@@ -45,11 +46,12 @@ export class WhatsappChannel {
   @Column({ name: 'meta_waba_id', type: 'varchar', length: 64, nullable: true })
   metaWabaId!: string | null;
 
-  /**
-   * Encrypted access token. The MVP stores it as-is for simplicity;
-   * for production wrap with envelope encryption (KMS) before persisting.
-   */
-  @Column({ name: 'access_token', type: 'text', nullable: true })
+  @Column({
+    name: 'access_token',
+    type: 'text',
+    nullable: true,
+    transformer: encryptedStringTransformer,
+  })
   accessToken!: string | null;
 
   @Column({

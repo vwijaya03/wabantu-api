@@ -1,5 +1,4 @@
 import {
-  IsEnum,
   IsOptional,
   IsString,
   Matches,
@@ -7,9 +6,16 @@ import {
   MinLength,
 } from 'class-validator';
 
-export class ConnectChannelDto {
-  @IsEnum(['meta_cloud', 'baileys'])
-  provider!: 'meta_cloud' | 'baileys';
+export class MetaConnectCallbackDto {
+  @IsString()
+  @MinLength(6)
+  @MaxLength(2048)
+  code!: string;
+
+  @IsString()
+  @MinLength(8)
+  @MaxLength(256)
+  state!: string;
 
   @IsString()
   @MinLength(2)
@@ -21,12 +27,6 @@ export class ConnectChannelDto {
     message: 'Nomor WhatsApp harus dalam format E.164',
   })
   phoneNumber!: string;
-
-  /** Long-lived Meta access token (only for meta_cloud). */
-  @IsOptional()
-  @IsString()
-  @MaxLength(2000)
-  accessToken?: string;
 
   @IsOptional()
   @IsString()
