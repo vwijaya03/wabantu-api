@@ -82,7 +82,7 @@ export class TenantConnectionService implements OnModuleDestroy {
       database,
       schema: company.schemaName,
       ssl: dbCfg.ssl ? { rejectUnauthorized: false } : false,
-      synchronize: false,
+      synchronize: dbCfg.synchronize,
       logging: dbCfg.logging,
       entities: TENANT_ENTITIES,
       poolSize: dbCfg.poolMax,

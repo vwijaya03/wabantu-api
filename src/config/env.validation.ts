@@ -74,10 +74,8 @@ export const envValidationSchema = Joi.object({
   WHATSAPP_PROVIDER: Joi.string()
     .valid('meta_cloud', 'baileys')
     .default('meta_cloud'),
-  META_GRAPH_API_VERSION: Joi.string().default('v20.0'),
-  META_APP_ID: Joi.string().allow('').default(''),
+  META_GRAPH_API_VERSION: Joi.string().default('v25.0'),
   META_WEBHOOK_VERIFY_TOKEN: Joi.string().allow('').default(''),
-  META_APP_SECRET: Joi.string().allow('').default(''),
 
   // AI
   ANTHROPIC_API_KEY: Joi.string().allow('').default(''),

@@ -88,8 +88,25 @@ Required for first run:
 
 Optional but recommended:
 
-- `META_WEBHOOK_VERIFY_TOKEN` + `META_APP_SECRET` — for WhatsApp webhook
+- `META_WEBHOOK_VERIFY_TOKEN` — for WhatsApp webhook verification
 - `ANTHROPIC_API_KEY` — when you wire the AI auto-reply pipeline
+
+## WhatsApp OAuth credentials model (important)
+
+WABantu now stores Meta OAuth app credentials per connected channel
+(tenant-scoped), not globally from API env:
+
+- `whatsapp_channel.meta_app_id`
+- `whatsapp_channel.meta_app_secret` (encrypted)
+
+OAuth init endpoint expects those values from onboarding input:
+
+- `POST /api/v1/whatsapp/meta/connect/init`
+  - `redirectUri`
+  - `metaAppId`
+  - `metaAppSecret`
+
+`META_APP_ID` and `META_APP_SECRET` are no longer required in `.env`.
 
 ## Running
 
@@ -142,6 +159,12 @@ from the same `.env` file.
    resolves a repository per request via `getDataSourceForTenant()`.
 4. In dev, the next register/login auto-syncs the schema. In prod,
    ship a migration that runs across every existing tenant schema.
+
+### Existing tenant schema sync note
+
+`TenantConnectionService` now respects `TENANT_DB_SYNCHRONIZE` for tenant
+DataSource initialization. In local dev, set `TENANT_DB_SYNCHRONIZE=true`
+and restart API to apply entity column changes to active tenant schemas.
 
 ## Adding a new WhatsApp provider
 

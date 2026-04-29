@@ -23,6 +23,8 @@ interface MetaOauthStatePayload {
   tenantId: string;
   userId: string;
   redirectUri: string;
+  metaAppId: string;
+  metaAppSecret: string;
 }
 
 interface ChannelConnectPayload {
@@ -32,6 +34,22 @@ interface ChannelConnectPayload {
   accessToken?: string;
   metaPhoneNumberId?: string;
   metaWabaId?: string;
+  metaAppId?: string;
+  metaAppSecret?: string;
+}
+
+interface MetaPhoneNumberNode {
+  id?: string;
+  display_phone_number?: string;
+}
+
+interface MetaWabaNode {
+  id?: string;
+  phone_numbers?: { data?: MetaPhoneNumberNode[] } | MetaPhoneNumberNode[];
+}
+
+interface MetaMeResponse {
+  whatsapp_business_accounts?: { data?: MetaWabaNode[] } | MetaWabaNode[];
 }
 
 @Injectable()
@@ -42,8 +60,6 @@ export class WhatsappService {
     WhatsappProvider | null
   >;
   private readonly graphVersion: string;
-  private readonly appId: string;
-  private readonly appSecret: string;
   private readonly oauthStateTtlSeconds = 10 * 60;
 
   constructor(
@@ -60,8 +76,6 @@ export class WhatsappService {
     };
     const wa = config.getOrThrow<WhatsAppConfig>('whatsapp');
     this.graphVersion = wa.metaGraphApiVersion;
-    this.appId = wa.metaAppId;
-    this.appSecret = wa.metaAppSecret;
   }
 
   private async repo(user: AuthUser) {
@@ -92,6 +106,8 @@ export class WhatsappService {
         accessToken: dto.accessToken ?? existing.accessToken,
         metaPhoneNumberId: dto.metaPhoneNumberId ?? existing.metaPhoneNumberId,
         metaWabaId: dto.metaWabaId ?? existing.metaWabaId,
+        metaAppId: dto.metaAppId ?? existing.metaAppId,
+        metaAppSecret: dto.metaAppSecret ?? existing.metaAppSecret,
         status: 'connected',
         connectedAt: new Date(),
         lastError: null,
@@ -106,6 +122,8 @@ export class WhatsappService {
       accessToken: dto.accessToken ?? null,
       metaPhoneNumberId: dto.metaPhoneNumberId ?? null,
       metaWabaId: dto.metaWabaId ?? null,
+      metaAppId: dto.metaAppId ?? null,
+      metaAppSecret: dto.metaAppSecret ?? null,
       status: 'connected',
       connectedAt: new Date(),
     });
@@ -113,9 +131,11 @@ export class WhatsappService {
   }
 
   async initMetaConnect(user: AuthUser, dto: MetaConnectInitDto) {
-    if (!this.appId || !this.appSecret) {
+    const appId = dto.metaAppId;
+    const appSecret = dto.metaAppSecret;
+    if (!appId || !appSecret) {
       throw new BadRequestException(
-        'META_APP_ID dan META_APP_SECRET wajib diisi untuk flow OAuth Meta',
+        'metaAppId dan metaAppSecret wajib diisi untuk flow OAuth Meta',
       );
     }
     const state = randomBytes(24).toString('hex');
@@ -124,6 +144,8 @@ export class WhatsappService {
       tenantId: user.tenantId,
       userId: user.userId,
       redirectUri: dto.redirectUri,
+      metaAppId: appId,
+      metaAppSecret: appSecret,
     };
     await this.redis.set(
       key,
@@ -140,7 +162,7 @@ export class WhatsappService {
     const oauthUrl = new URL(
       `https://www.facebook.com/${this.graphVersion}/dialog/oauth`,
     );
-    oauthUrl.searchParams.set('client_id', this.appId);
+    oauthUrl.searchParams.set('client_id', appId);
     oauthUrl.searchParams.set('redirect_uri', dto.redirectUri);
     oauthUrl.searchParams.set('state', state);
     oauthUrl.searchParams.set('scope', scopes.join(','));
@@ -172,10 +194,19 @@ export class WhatsappService {
     if (!payload.tenantId || !payload.userId || !payload.redirectUri) {
       throw new BadRequestException('State OAuth tidak lengkap');
     }
+    if (!payload.metaAppId || !payload.metaAppSecret) {
+      throw new BadRequestException('State OAuth app credentials tidak lengkap');
+    }
 
     const accessToken = await this.exchangeMetaCodeForToken(
       dto.code,
       payload.redirectUri,
+      payload.metaAppId,
+      payload.metaAppSecret,
+    );
+    const discovered = await this.fetchMetaWabaAndPhoneNumberIds(
+      accessToken,
+      dto.phoneNumber,
     );
 
     const repo = await this.repoByTenantId(payload.tenantId);
@@ -184,8 +215,10 @@ export class WhatsappService {
       displayName: dto.displayName,
       phoneNumber: dto.phoneNumber,
       accessToken,
-      metaPhoneNumberId: dto.metaPhoneNumberId,
-      metaWabaId: dto.metaWabaId,
+      metaPhoneNumberId: dto.metaPhoneNumberId ?? discovered.metaPhoneNumberId,
+      metaWabaId: dto.metaWabaId ?? discovered.metaWabaId,
+      metaAppId: payload.metaAppId,
+      metaAppSecret: payload.metaAppSecret,
     });
   }
 
@@ -239,17 +272,19 @@ export class WhatsappService {
   private async exchangeMetaCodeForToken(
     code: string,
     redirectUri: string,
+    appId: string,
+    appSecret: string,
   ): Promise<string> {
-    if (!this.appId || !this.appSecret) {
+    if (!appId || !appSecret) {
       throw new BadRequestException(
-        'META_APP_ID dan META_APP_SECRET wajib diisi untuk token exchange',
+        'metaAppId dan metaAppSecret wajib diisi untuk token exchange',
       );
     }
     const url = new URL(
       `https://graph.facebook.com/${this.graphVersion}/oauth/access_token`,
     );
-    url.searchParams.set('client_id', this.appId);
-    url.searchParams.set('client_secret', this.appSecret);
+    url.searchParams.set('client_id', appId);
+    url.searchParams.set('client_secret', appSecret);
     url.searchParams.set('redirect_uri', redirectUri);
     url.searchParams.set('code', code);
 
@@ -268,5 +303,66 @@ export class WhatsappService {
         'Gagal menukar authorization code ke access token Meta',
       );
     }
+  }
+
+  private async fetchMetaWabaAndPhoneNumberIds(
+    accessToken: string,
+    targetPhoneNumber: string,
+  ): Promise<{ metaWabaId?: string; metaPhoneNumberId?: string }> {
+    const url = new URL(`https://graph.facebook.com/${this.graphVersion}/me`);
+    url.searchParams.set(
+      'fields',
+      'whatsapp_business_accounts{id,phone_numbers{id,display_phone_number}}',
+    );
+    url.searchParams.set('access_token', accessToken);
+
+    try {
+      const res = await axios.get<MetaMeResponse>(url.toString(), {
+        timeout: 15_000,
+      });
+      const wabasRaw = res.data.whatsapp_business_accounts;
+      const wabas = Array.isArray(wabasRaw)
+        ? wabasRaw
+        : (wabasRaw?.data ?? []);
+      if (wabas.length === 0) return {};
+
+      const target = this.normalizePhone(targetPhoneNumber);
+      const firstWaba = wabas[0];
+      let fallbackPhoneId: string | undefined;
+
+      for (const waba of wabas) {
+        const phonesRaw = waba.phone_numbers;
+        const phones = Array.isArray(phonesRaw)
+          ? phonesRaw
+          : (phonesRaw?.data ?? []);
+        if (!fallbackPhoneId && phones[0]?.id) {
+          fallbackPhoneId = phones[0].id;
+        }
+        for (const phone of phones) {
+          const candidate = this.normalizePhone(phone.display_phone_number ?? '');
+          if (candidate && target && candidate.endsWith(target) && phone.id) {
+            return {
+              metaWabaId: waba.id,
+              metaPhoneNumberId: phone.id,
+            };
+          }
+        }
+      }
+
+      return {
+        metaWabaId: firstWaba?.id,
+        metaPhoneNumberId: fallbackPhoneId,
+      };
+    } catch (error) {
+      this.logger.warn(
+        'Unable to auto-discover Meta WABA/phone IDs; channel will still connect',
+      );
+      this.logger.debug(error);
+      return {};
+    }
+  }
+
+  private normalizePhone(value: string): string {
+    return value.replace(/\D/g, '');
   }
 }

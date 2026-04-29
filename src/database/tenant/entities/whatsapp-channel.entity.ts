@@ -46,6 +46,19 @@ export class WhatsappChannel {
   @Column({ name: 'meta_waba_id', type: 'varchar', length: 64, nullable: true })
   metaWabaId!: string | null;
 
+  /** Meta app id used for this channel OAuth flow. */
+  @Column({ name: 'meta_app_id', type: 'varchar', length: 64, nullable: true })
+  metaAppId!: string | null;
+
+  /** Encrypted Meta app secret used for this channel OAuth flow. */
+  @Column({
+    name: 'meta_app_secret',
+    type: 'text',
+    nullable: true,
+    transformer: encryptedStringTransformer,
+  })
+  metaAppSecret!: string | null;
+
   @Column({
     name: 'access_token',
     type: 'text',

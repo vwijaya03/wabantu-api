@@ -24,7 +24,8 @@ WABantu terdiri dari 3 bagian:
 Contoh user login dari browser:
 
 1. User submit form login di halaman Next.js `/login`.
-2. Frontend memanggil `POST http://localhost:3001/api/v1/auth/login`.
+2. Browser memanggil `POST /api/v1/auth/login` (same-origin ke Next.js), lalu
+   Next rewrite meneruskan ke API `http://localhost:3001/api/v1/...` saat dev.
 3. API validasi email/password.
 4. Jika valid:
    - API buat session di Redis.
@@ -212,21 +213,31 @@ Kenapa double-check (proxy + layout)?
 
 Saat ini UI hanya mendukung **1 cara** connect WhatsApp, yaitu OAuth Meta (tanpa form access token manual):
 
-1. User buka `/dashboard/whatsapp`.
+1. User buka `/dashboard/whatsapp/onboarding`.
 2. User isi:
    - `Nama channel`
    - `Nomor WhatsApp Business`
+   - `Meta App ID`
+   - `Meta App Secret`
 3. Frontend call `POST /api/v1/whatsapp/meta/connect/init` untuk membuat `oauthUrl` + `state`.
-4. Frontend simpan data form sementara di `localStorage`, lalu redirect ke OAuth Meta.
-5. Setelah authorize, Meta redirect balik ke `/dashboard/whatsapp?code=...&state=...`.
-6. Frontend auto-detect `code` + `state`, validasi dengan data pending, lalu auto-call
+4. API menyimpan `state` + app credentials sementara di Redis (TTL 10 menit).
+5. Frontend simpan data non-sensitive sementara di `localStorage`, lalu redirect ke OAuth Meta.
+6. Setelah authorize, Meta redirect balik ke `/dashboard/whatsapp/onboarding?code=...&state=...`.
+7. Frontend auto-detect `code` + `state`, validasi dengan data pending, lalu auto-call
    `POST /api/v1/whatsapp/meta/connect/callback`.
-7. API tukar `code -> access_token`, upsert `whatsapp_channel` per-tenant, lalu frontend refresh list channel.
+8. API:
+   - menukar `code -> access_token`
+   - auto-discover `meta_waba_id` + `meta_phone_number_id` dari Graph API
+   - upsert `whatsapp_channel` per-tenant
+   - menyimpan `meta_app_id` + `meta_app_secret` per channel
+9. Frontend refresh list channel di `/dashboard/whatsapp`.
 
 Catatan:
 
-- `metaPhoneNumberId` dan `metaWabaId` saat callback sekarang opsional untuk onboarding yang lebih simpel.
+- `metaPhoneNumberId` dan `metaWabaId` dari input callback bersifat opsional.
+- Untuk UX sederhana, API auto-discovery akan mencoba mengisi keduanya.
 - `access_token` channel disimpan terenkripsi di database.
+- `meta_app_secret` channel juga disimpan terenkripsi.
 - Halaman overview dashboard (`/dashboard`) membaca status WhatsApp dari `/whatsapp/channels`, jadi checklist/status tidak lagi hardcoded.
 
 ---
@@ -242,7 +253,7 @@ Penyebab paling umum:
 Checklist cepat:
 
 - `web-frontend/.env.local`
-  - `NEXT_PUBLIC_API_URL=http://localhost:3001/api/v1`
+  - `NEXT_PUBLIC_API_URL=/api/v1`
   - `API_URL_INTERNAL=http://localhost:3001/api/v1`
 - API running dan bisa hit `/api/v1/auth/me`.
 - Redis port benar dan bisa diakses API.
