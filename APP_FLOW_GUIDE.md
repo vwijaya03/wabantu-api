@@ -87,6 +87,26 @@ Contoh nyata:
 - `GET /api/v1/whatsapp/webhook/meta` (public)
 - `POST /api/v1/whatsapp/webhook/meta` (public)
 
+### Inbox (`InboxController`)
+- `GET /api/v1/inbox/conversations` — daftar percakapan (query: `search`, `unreadOnly`, `aiHandled`)
+- `GET /api/v1/inbox/conversations/:id/messages`
+- `PATCH /api/v1/inbox/conversations/:id/read`
+- `POST /api/v1/inbox/conversations/:id/handoff` — serahkan ke manusia
+- `POST /api/v1/inbox/conversations/:id/ai-resume` — aktifkan lagi AI
+- `POST /api/v1/inbox/conversations/:id/messages` — balasan manual dari dashboard
+
+### Leads (`LeadsController`)
+- `GET /api/v1/leads` — optional filter `?status=...`
+- `PATCH /api/v1/leads/:id`
+
+### Billing (`BillingController`, owner)
+- `GET /api/v1/billing/overview`
+- `GET /api/v1/billing/invoices`
+- `POST /api/v1/billing/select-plan`
+
+### Analytics (`AnalyticsController`)
+- `GET /api/v1/analytics/overview` — query optional `?days=` (default 30)
+
 ### Health
 - `GET /health`
 - `GET /health/ready`
@@ -104,7 +124,7 @@ Di `api/src/app.module.ts`, modul utama yang di-import:
 - `ThrottlerModule`: rate limiting.
 - `DatabaseModule`: koneksi DB system + tenant resolver.
 - `RedisModule`: redis client.
-- `AuthModule`, `BusinessModule`, `KnowledgeBaseModule`, `WhatsappModule`, `HealthModule`.
+- `AuthModule`, `BusinessModule`, `KnowledgeBaseModule`, `WhatsappModule`, `InboxModule`, `LeadsModule`, `AnalyticsModule`, `BillingModule`, `HealthModule`.
 
 Global guard:
 
@@ -227,18 +247,23 @@ Saat ini UI hanya mendukung **1 cara** connect WhatsApp, yaitu OAuth Meta (tanpa
    `POST /api/v1/whatsapp/meta/connect/callback`.
 8. API:
    - menukar `code -> access_token`
-   - auto-discover `meta_waba_id` + `meta_phone_number_id` dari Graph API
+   - auto-discover `meta_waba_id` + `meta_phone_number_id` dari Graph API (`/me?fields=whatsapp_business_accounts{...}`)
    - upsert `whatsapp_channel` per-tenant
    - menyimpan `meta_app_id` + `meta_app_secret` per channel
 9. Frontend refresh list channel di `/dashboard/whatsapp`.
 
 Catatan:
 
-- `metaPhoneNumberId` dan `metaWabaId` dari input callback bersifat opsional.
-- Untuk UX sederhana, API auto-discovery akan mencoba mengisi keduanya.
+- **`POST .../connect/init` hanya membuat OAuth URL** — tidak mengembalikan `meta_waba_id` / `meta_phone_number_id`. ID baru dicoba di **`.../callback`** lewat Graph.
+- Jika Graph tidak mengembalikan daftar WABA (scope/token, akun dibatasi, dll.), kolom ID bisa tetap kosong sampai terisi dari webhook atau diperbaiki di Meta.
+- `metaPhoneNumberId` dan `metaWabaId` dari body callback bersifat opsional; auto-discovery mengisi jika cocok dengan nomor onboarding.
 - `access_token` channel disimpan terenkripsi di database.
 - `meta_app_secret` channel juga disimpan terenkripsi.
 - Halaman overview dashboard (`/dashboard`) membaca status WhatsApp dari `/whatsapp/channels`, jadi checklist/status tidak lagi hardcoded.
+
+### Webhook masuk (setelah channel terhubung)
+
+Payload Meta menyertakan **`phone_number_id`** dan **`display_phone_number`**. Resolver tenant tidak hanya mengandalkan ID di DB: ia **mencocokkan nomor tampilan** dengan `whatsapp_channel.phoneNumber` (normalisasi), dan jika channel ketemu tanpa `meta_phone_number_id`, API dapat **menyimpan backfill** dari webhook.
 
 ---
 

@@ -33,7 +33,10 @@ src/
 ├── business/                   # Business profile (per-tenant)
 ├── knowledge-base/             # FAQ entries (per-tenant)
 ├── whatsapp/                   # Meta Cloud API + webhook
-├── inbox/                      # (entities live in database/tenant)
+├── inbox/                      # Conversations & messages (human handoff)
+├── leads/                      # Lead pipeline (status + notes)
+├── billing/                    # Plans, invoices, subscription overview
+├── analytics/                  # Dashboard metrics (overview)
 └── health/                     # Liveness + readiness
 ```
 
@@ -107,6 +110,17 @@ OAuth init endpoint expects those values from onboarding input:
   - `metaAppSecret`
 
 `META_APP_ID` and `META_APP_SECRET` are no longer required in `.env`.
+
+## WhatsApp inbound routing (webhook)
+
+Meta sends **`phone_number_id`** (not the E.164 business number) on inbound webhooks. The API resolves the tenant `whatsapp_channel` by:
+
+- `meta_phone_number_id` when set, and/or  
+- normalizing **`display_phone_number`** from the webhook against the channel’s stored business **`phoneNumber`**.
+
+If the channel matched but **`meta_phone_number_id` was missing**, it is **persisted** from the webhook when possible so future lookups are stable.
+
+See `APP_FLOW_GUIDE.md` for OAuth vs webhook ID discovery and troubleshooting.
 
 ## Running
 

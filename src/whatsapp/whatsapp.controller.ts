@@ -107,7 +107,7 @@ export class WhatsappController {
   @Public()
   @HttpCode(HttpStatus.OK)
   @Post('webhook/meta')
-  receiveMeta(@Req() _req: Request, @Body() _payload: unknown) {
-    return { received: true };
+  receiveMeta(@Req() _req: Request, @Body() payload: unknown) {
+    return this.whatsapp.receiveMetaWebhook(payload);
   }
 }

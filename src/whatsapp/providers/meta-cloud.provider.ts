@@ -84,6 +84,7 @@ export class MetaCloudProvider implements WhatsappProvider {
       for (const change of entry.changes ?? []) {
         const value = change.value;
         const phoneNumberId = value?.metadata?.phone_number_id ?? '';
+        const displayPhone = value?.metadata?.display_phone_number;
         for (const m of value?.messages ?? []) {
           let body: string | null = null;
           let type: InboundMessage['type'] = 'text';
@@ -120,6 +121,7 @@ export class MetaCloudProvider implements WhatsappProvider {
             externalId: m.id,
             fromPhone: m.from,
             toAddress: phoneNumberId,
+            toDisplayPhoneNumber: displayPhone,
             type,
             body,
             raw: m,

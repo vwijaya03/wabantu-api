@@ -47,6 +47,23 @@ export class Conversation {
   @Column({ name: 'unread_count', type: 'integer', default: 0 })
   unreadCount!: number;
 
+  @Column({ name: 'assigned_to_user_id', type: 'uuid', nullable: true })
+  assignedToUserId!: string | null;
+
+  @Column({
+    name: 'assigned_to_name',
+    type: 'varchar',
+    length: 120,
+    nullable: true,
+  })
+  assignedToName!: string | null;
+
+  @Column({ name: 'handoff_reason', type: 'varchar', length: 280, nullable: true })
+  handoffReason!: string | null;
+
+  @Column({ name: 'ai_paused_at', type: 'timestamptz', nullable: true })
+  aiPausedAt!: Date | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;
 

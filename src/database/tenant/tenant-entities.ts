@@ -1,8 +1,11 @@
 import { BusinessProfile } from './entities/business-profile.entity';
 import { Contact } from './entities/contact.entity';
 import { Conversation } from './entities/conversation.entity';
+import { Invoice } from './entities/invoice.entity';
 import { KnowledgeBaseEntry } from './entities/knowledge-base-entry.entity';
+import { Lead } from './entities/lead.entity';
 import { Message } from './entities/message.entity';
+import { Subscription } from './entities/subscription.entity';
 import { WhatsappChannel } from './entities/whatsapp-channel.entity';
 
 /**
@@ -18,4 +21,7 @@ export const TENANT_ENTITIES = [
   Contact,
   Conversation,
   Message,
+  Lead,
+  Subscription,
+  Invoice,
 ];

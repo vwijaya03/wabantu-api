@@ -6,11 +6,18 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { InjectRepository } from '@nestjs/typeorm';
 import type Redis from 'ioredis';
 import axios from 'axios';
 import { randomBytes } from 'crypto';
+import { Repository } from 'typeorm';
 import { TenantConnectionService } from '../database/tenant/tenant-connection.service';
+import { Contact } from '../database/tenant/entities/contact.entity';
+import { Conversation } from '../database/tenant/entities/conversation.entity';
+import { Lead } from '../database/tenant/entities/lead.entity';
+import { Message } from '../database/tenant/entities/message.entity';
 import { WhatsappChannel } from '../database/tenant/entities/whatsapp-channel.entity';
+import { TenantCompany } from '../database/system/entities/tenant-company.entity';
 import type { AuthUser } from '../common/types/request.types';
 import { REDIS_CLIENT } from '../redis/redis.module';
 import type { WhatsAppConfig } from '../config/configuration';
@@ -66,6 +73,8 @@ export class WhatsappService {
     private readonly tenantConn: TenantConnectionService,
     metaCloud: MetaCloudProvider,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
+    @InjectRepository(TenantCompany)
+    private readonly tenantCompanyRepo: Repository<TenantCompany>,
     config: ConfigService,
   ) {
     this.providers = {
@@ -157,7 +166,6 @@ export class WhatsappService {
     const scopes = [
       'whatsapp_business_messaging',
       'whatsapp_business_management',
-      'business_management',
     ];
     const oauthUrl = new URL(
       `https://www.facebook.com/${this.graphVersion}/dialog/oauth`,
@@ -265,6 +273,221 @@ export class WhatsappService {
     );
   }
 
+  async receiveMetaWebhook(payload: unknown): Promise<{ received: boolean }> {
+    const metaProvider = this.providers.meta_cloud;
+    if (!metaProvider) return { received: true };
+    const inbound = metaProvider.parseWebhook(payload);
+    if (inbound.length === 0) return { received: true };
+
+    for (const item of inbound) {
+      try {
+        await this.ingestInboundMessage(item);
+      } catch (err) {
+        this.logger.warn(
+          `Failed ingest inbound ${item.externalId}: ${(err as Error).message}`,
+        );
+      }
+    }
+    return { received: true };
+  }
+
+  private async ingestInboundMessage(
+    inbound: import('./providers/whatsapp-provider.interface').InboundMessage,
+  ) {
+    const resolved = await this.resolveTenantByInboundAddress(inbound);
+    if (!resolved) {
+      this.logger.warn(
+        `Webhook ignored: no tenant channel for phone_number_id=${inbound.toAddress}` +
+          (inbound.toDisplayPhoneNumber
+            ? ` display_phone=${inbound.toDisplayPhoneNumber}`
+            : '') +
+          ' — pastikan whatsapp_channel.meta_phone_number_id terisi atau phone_number bisnis cocok dengan OAuth',
+      );
+      return;
+    }
+    const { tenantId, channel } = resolved;
+    const ds = await this.tenantConn.getDataSourceForTenant(tenantId);
+    const contactRepo = ds.getRepository(Contact);
+    const convoRepo = ds.getRepository(Conversation);
+    const msgRepo = ds.getRepository(Message);
+    const leadRepo = ds.getRepository(Lead);
+
+    const existingMessage = await msgRepo.findOne({
+      where: { externalId: inbound.externalId },
+    });
+    if (existingMessage) return;
+
+    const normalizedFrom = this.normalizePhone(inbound.fromPhone);
+    let contact = await contactRepo.findOne({
+      where: { phoneNumber: normalizedFrom },
+    });
+    if (!contact) {
+      contact = await contactRepo.save(
+        contactRepo.create({
+          phoneNumber: normalizedFrom,
+          displayName: null,
+          notes: null,
+          tags: ['new'],
+        }),
+      );
+    }
+
+    let convo = await convoRepo.findOne({
+      where: { channelId: channel.id, contactId: contact.id },
+    });
+    if (!convo) {
+      convo = await convoRepo.save(
+        convoRepo.create({
+          channelId: channel.id,
+          contactId: contact.id,
+          status: 'open',
+          aiHandled: true,
+          unreadCount: 0,
+        }),
+      );
+    }
+
+    const msg = await msgRepo.save(
+      msgRepo.create({
+        conversationId: convo.id,
+        externalId: inbound.externalId,
+        direction: 'in',
+        author: 'contact',
+        type: inbound.type,
+        body: inbound.body,
+        metadata: inbound.raw,
+        status: 'delivered',
+      }),
+    );
+
+    convo.unreadCount += 1;
+    convo.lastMessageAt = msg.createdAt;
+    convo.lastMessagePreview = (inbound.body ?? inbound.type).slice(0, 280);
+    convo.status = 'open';
+    await convoRepo.save(convo);
+
+    await this.captureLeadFromMessage(leadRepo, {
+      contactId: contact.id,
+      conversationId: convo.id,
+      phoneNumber: contact.phoneNumber,
+      body: inbound.body,
+    });
+  }
+
+  private async resolveTenantByInboundAddress(
+    inbound: import('./providers/whatsapp-provider.interface').InboundMessage,
+  ): Promise<{
+    tenantId: string;
+    channel: WhatsappChannel;
+  } | null> {
+    const phoneNumberId = inbound.toAddress?.trim() ?? '';
+    const displayNorm = inbound.toDisplayPhoneNumber
+      ? this.normalizePhone(inbound.toDisplayPhoneNumber)
+      : '';
+
+    const companies = await this.tenantCompanyRepo.find({
+      select: ['tenantId', 'host', 'port', 'database', 'schemaName'],
+    });
+    for (const company of companies) {
+      try {
+        const ds = await this.tenantConn.getDataSourceForCompany(company);
+        const repo = ds.getRepository(WhatsappChannel);
+        const channels = await repo.find();
+        const channel = channels.find((ch) => {
+          if (phoneNumberId && ch.metaPhoneNumberId === phoneNumberId) {
+            return true;
+          }
+          if (displayNorm && this.normalizePhone(ch.phoneNumber) === displayNorm) {
+            return true;
+          }
+          if (
+            phoneNumberId &&
+            this.normalizePhone(ch.phoneNumber) === this.normalizePhone(phoneNumberId)
+          ) {
+            return true;
+          }
+          return false;
+        });
+        if (channel) {
+          if (!channel.metaPhoneNumberId && phoneNumberId) {
+            channel.metaPhoneNumberId = phoneNumberId;
+            await repo.save(channel).catch(() => undefined);
+            this.logger.log(
+              `Backfilled metaPhoneNumberId for channel ${channel.id} from webhook`,
+            );
+          }
+          return { tenantId: company.tenantId, channel };
+        }
+      } catch (err) {
+        this.logger.debug(
+          `resolveTenant skip company ${company.tenantId}: ${(err as Error).message}`,
+        );
+        continue;
+      }
+    }
+    return null;
+  }
+
+  private async captureLeadFromMessage(
+    leadRepo: Repository<Lead>,
+    input: {
+      contactId: string;
+      conversationId: string;
+      phoneNumber: string;
+      body: string | null;
+    },
+  ) {
+    const text = (input.body ?? '').trim();
+    if (!text) return;
+    const lower = text.toLowerCase();
+    const leadSignals = [
+      'harga',
+      'order',
+      'pesan',
+      'stok',
+      'budget',
+      'lokasi',
+      'kirim',
+      'cod',
+      'minat',
+    ];
+    if (!leadSignals.some((k) => lower.includes(k))) return;
+
+    const existing = await leadRepo.findOne({
+      where: { conversationId: input.conversationId, status: 'new' },
+      order: { createdAt: 'DESC' },
+    });
+    if (existing) {
+      existing.metadata = { ...existing.metadata, latestMessage: text };
+      await leadRepo.save(existing);
+      return;
+    }
+
+    const budgetMatch = text.match(
+      /(rp|idr)?\s?([0-9]{2,3}(?:[.,][0-9]{3})+|[0-9]{5,})/i,
+    );
+    const locationMatch = text.match(
+      /(di|ke|area|kota)\s+([a-zA-Z\s]{3,40})/i,
+    );
+
+    await leadRepo.save(
+      leadRepo.create({
+        contactId: input.contactId,
+        conversationId: input.conversationId,
+        phoneNumber: input.phoneNumber,
+        status: 'new',
+        productInterest: lower.includes('sepatu')
+          ? 'sepatu'
+          : lower.includes('paket')
+            ? 'paket'
+            : null,
+        budget: budgetMatch?.[0] ?? null,
+        location: locationMatch?.[2]?.trim() ?? null,
+        metadata: { source: 'webhook', triggerMessage: text },
+      }),
+    );
+  }
+
   private oauthStateKey(state: string): string {
     return `whatsapp:meta:oauth:${state}`;
   }
@@ -324,7 +547,14 @@ export class WhatsappService {
       const wabas = Array.isArray(wabasRaw)
         ? wabasRaw
         : (wabasRaw?.data ?? []);
-      if (wabas.length === 0) return {};
+      if (wabas.length === 0) {
+        this.logger.warn(
+          'Meta Graph /me tidak mengembalikan whatsapp_business_accounts — ' +
+            'token OAuth mungkin tidak punya akses baca WABA, atau akun dibatasi. ' +
+            'meta_waba_id / meta_phone_number_id bisa diisi belakangan lewat webhook.',
+        );
+        return {};
+      }
 
       const target = this.normalizePhone(targetPhoneNumber);
       const firstWaba = wabas[0];
@@ -340,7 +570,13 @@ export class WhatsappService {
         }
         for (const phone of phones) {
           const candidate = this.normalizePhone(phone.display_phone_number ?? '');
-          if (candidate && target && candidate.endsWith(target) && phone.id) {
+          const sameNumber =
+            candidate &&
+            target &&
+            (candidate === target ||
+              candidate.endsWith(target) ||
+              target.endsWith(candidate));
+          if (sameNumber && phone.id) {
             return {
               metaWabaId: waba.id,
               metaPhoneNumberId: phone.id,
@@ -354,10 +590,13 @@ export class WhatsappService {
         metaPhoneNumberId: fallbackPhoneId,
       };
     } catch (error) {
+      const ax = axios.isAxiosError(error);
+      const detail = ax
+        ? JSON.stringify(error.response?.data ?? error.message)
+        : (error as Error).message;
       this.logger.warn(
-        'Unable to auto-discover Meta WABA/phone IDs; channel will still connect',
+        `Gagal auto-discover WABA/phone_number_id dari Graph /me: ${detail.slice(0, 500)}`,
       );
-      this.logger.debug(error);
       return {};
     }
   }

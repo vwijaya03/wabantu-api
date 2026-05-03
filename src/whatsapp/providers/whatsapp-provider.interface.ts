@@ -19,8 +19,16 @@ export interface InboundMessage {
   externalId: string;
   /** E.164 phone of the customer. */
   fromPhone: string;
-  /** Channel-side phone number / phone_number_id that received the message. */
+  /**
+   * Meta Cloud: `metadata.phone_number_id` for the business number that received the message.
+   * Used to match `WhatsappChannel.metaPhoneNumberId`.
+   */
   toAddress: string;
+  /**
+   * Meta Cloud: `metadata.display_phone_number` (may include formatting).
+   * Used to match `WhatsappChannel.phoneNumber` when `metaPhoneNumberId` was never stored.
+   */
+  toDisplayPhoneNumber?: string;
   type: 'text' | 'image' | 'audio' | 'video' | 'document' | 'location';
   body: string | null;
   /** Provider-specific raw payload kept for debugging / replay. */

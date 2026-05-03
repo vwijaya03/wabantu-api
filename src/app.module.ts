@@ -12,11 +12,15 @@ import { DatabaseModule } from './database/database.module';
 import { RedisModule } from './redis/redis.module';
 
 import { AuthModule } from './auth/auth.module';
+import { BillingModule } from './billing/billing.module';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { BusinessModule } from './business/business.module';
 import { HealthModule } from './health/health.module';
+import { InboxModule } from './inbox/inbox.module';
 import { KnowledgeBaseModule } from './knowledge-base/knowledge-base.module';
+import { LeadsModule } from './leads/leads.module';
 import { WhatsappModule } from './whatsapp/whatsapp.module';
+import { AnalyticsModule } from './analytics/analytics.module';
 
 @Module({
   imports: [
@@ -67,6 +71,10 @@ import { WhatsappModule } from './whatsapp/whatsapp.module';
     BusinessModule,
     KnowledgeBaseModule,
     WhatsappModule,
+    InboxModule,
+    LeadsModule,
+    AnalyticsModule,
+    BillingModule,
     HealthModule,
   ],
   providers: [
