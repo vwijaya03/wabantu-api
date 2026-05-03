@@ -1,4 +1,12 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { isAllowedReportingTimezone } from '../common/constants/reporting-timezones.constants';
+import {
+  DEFAULT_REPORTING_TIMEZONE,
+} from '../common/utils/timezone.util';
 import { TenantConnectionService } from '../database/tenant/tenant-connection.service';
 import { BusinessProfile } from '../database/tenant/entities/business-profile.entity';
 import type { AuthUser } from '../common/types/request.types';
@@ -22,7 +30,12 @@ export class BusinessService {
     if (!profile) {
       // First-time access — create an empty placeholder so the dashboard
       // never has to deal with "what if profile is null".
-      return repo.save(repo.create({ businessName: 'Bisnis Baru' }));
+      return repo.save(
+        repo.create({
+          businessName: 'Bisnis Baru',
+          reportingTimezone: DEFAULT_REPORTING_TIMEZONE,
+        }),
+      );
     }
     return profile;
   }
@@ -37,7 +50,17 @@ export class BusinessService {
       order: { createdAt: 'ASC' },
     });
     if (!profile) throw new NotFoundException('Profile tidak ditemukan');
-    Object.assign(profile, dto);
+    const { reportingTimezone: tzIn, ...rest } = dto;
+    Object.assign(profile, rest);
+    if (tzIn !== undefined) {
+      const z = tzIn.trim();
+      if (!isAllowedReportingTimezone(z)) {
+        throw new BadRequestException(
+          'Timezone tidak didukung. Pilih dari daftar di Pengaturan AI.',
+        );
+      }
+      profile.reportingTimezone = z;
+    }
     return repo.save(profile);
   }
 }

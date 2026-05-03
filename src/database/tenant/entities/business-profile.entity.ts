@@ -61,6 +61,18 @@ export class BusinessProfile {
   @Column({ name: 'ai_enabled', type: 'boolean', default: true })
   aiEnabled!: boolean;
 
+  /**
+   * IANA timezone for dashboard “hari ini” and analytics day boundaries
+   * (e.g. Asia/Jakarta).
+   */
+  @Column({
+    name: 'reporting_timezone',
+    type: 'varchar',
+    length: 100,
+    default: 'Asia/Jakarta',
+  })
+  reportingTimezone!: string;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;
 

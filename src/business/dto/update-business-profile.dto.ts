@@ -27,4 +27,10 @@ export class UpdateBusinessProfileDto {
   @IsOptional()
   @IsBoolean()
   aiEnabled?: boolean;
+
+  /** Must be one of `REPORTING_TIMEZONE_ALLOWLIST` (same list as AI Settings UI). */
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  reportingTimezone?: string;
 }
