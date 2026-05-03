@@ -69,8 +69,14 @@ Contoh nyata:
 - `GET /api/v1/auth/me` (auth required)
 
 ### Business Profile (`BusinessController`)
-- `GET /api/v1/business/profile` (auth required)
-- `PATCH /api/v1/business/profile` (owner only)
+- `GET /api/v1/business/profile` (auth required) — respons **plain object** dengan
+  `reportingTimezone` yang sudah dinormalisasi (`resolveReportingTimezone`, allowlist IANA).
+- `PATCH /api/v1/business/profile` (owner only) — field `reportingTimezone` opsional;
+  harus ada di `REPORTING_TIMEZONE_ALLOWLIST`; respons sama seperti GET.
+
+Implementasi: entity `BusinessProfile` → mapper `toBusinessProfileResponse()` di
+`src/business/mappers/business-profile-response.mapper.ts` (dipanggil controller
+setelah service), supaya serialisasi respons stabil untuk UI.
 
 ### Knowledge Base (`KnowledgeBaseController`)
 - `GET /api/v1/knowledge-base`
@@ -88,8 +94,10 @@ Contoh nyata:
 - `POST /api/v1/whatsapp/webhook/meta` (public)
 
 ### Inbox (`InboxController`)
-- `GET /api/v1/inbox/conversations` — daftar percakapan (query: `search`, `unreadOnly`, `aiHandled`)
-- `GET /api/v1/inbox/conversations/:id/messages`
+- `GET /api/v1/inbox/unread-summary` — total `unread_count` seluruh percakapan (badge sidebar & header)
+- `GET /api/v1/inbox/stream` — **SSE** (cookie auth): Redis pub/sub saat webhook menyimpan pesan masuk → UI invalidate cache tanpa polling HTTP interval
+- `GET /api/v1/inbox/conversations` — daftar paginated (query: `search`, `unreadOnly`, `aiHandled`, `limit`, `cursor` base64) → `{ items, nextCursor }`
+- `GET /api/v1/inbox/conversations/:id/messages` — riwayat pesan: `limit`, **`cursor`** (base64url JSON `{ createdAt, id }`, halaman berikutnya = pesan lebih lama) atau legacy `offset`; respons `{ messages, nextCursor, nextOffset }` (salah satu null sesuai mode)
 - `PATCH /api/v1/inbox/conversations/:id/read`
 - `POST /api/v1/inbox/conversations/:id/handoff` — serahkan ke manusia
 - `POST /api/v1/inbox/conversations/:id/ai-resume` — aktifkan lagi AI
@@ -105,7 +113,8 @@ Contoh nyata:
 - `POST /api/v1/billing/select-plan`
 
 ### Analytics (`AnalyticsController`)
-- `GET /api/v1/analytics/overview` — query optional `?days=` (default 30)
+- `GET /api/v1/analytics/overview` — query optional `?days=` (default 30); batas
+  “hari ini” mengikuti `reportingTimezone` pada profil bisnis tenant
 
 ### Health
 - `GET /health`
@@ -310,6 +319,9 @@ Artinya UX logout tetap aman walaupun ada gangguan jaringan sesaat.
 - `web-frontend/proxy.ts`
 - `web-frontend/app/(dashboard)/layout.tsx`
 - `web-frontend/lib/api/server.ts`
+- `web-frontend/lib/api/business.ts`
+- `web-frontend/lib/reporting-timezones.ts`
+- `web-frontend/app/(dashboard)/dashboard/ai-settings/page.tsx`
 - `web-frontend/app/(auth)/login/page.tsx`
 
 ---

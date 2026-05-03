@@ -25,6 +25,7 @@ import { MetaCloudProvider } from './providers/meta-cloud.provider';
 import type { WhatsappProvider } from './providers/whatsapp-provider.interface';
 import type { MetaConnectInitDto } from './dto/meta-connect-init.dto';
 import type { MetaConnectCallbackDto } from './dto/meta-connect-callback.dto';
+import { publishInboxActivity } from '../inbox/inbox-realtime';
 
 interface MetaOauthStatePayload {
   tenantId: string;
@@ -365,6 +366,8 @@ export class WhatsappService {
     convo.lastMessagePreview = (inbound.body ?? inbound.type).slice(0, 280);
     convo.status = 'open';
     await convoRepo.save(convo);
+
+    publishInboxActivity(this.redis, tenantId);
 
     await this.captureLeadFromMessage(leadRepo, {
       contactId: contact.id,

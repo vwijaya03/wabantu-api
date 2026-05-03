@@ -30,7 +30,7 @@ src/
 │       └── tenant-connection.service.ts
 ├── redis/                      # Shared ioredis client
 ├── auth/                       # Register, login, logout, JWT, sessions
-├── business/                   # Business profile (per-tenant)
+├── business/                   # Business profile (per-tenant) + response mapper
 ├── knowledge-base/             # FAQ entries (per-tenant)
 ├── whatsapp/                   # Meta Cloud API + webhook
 ├── inbox/                      # Conversations & messages (human handoff)
@@ -190,3 +190,14 @@ and restart API to apply entity column changes to active tenant schemas.
 
 The rest of the codebase (auto-reply pipeline, inbox) talks only to
 the interface — no other file needs changes.
+
+## Business profile & reporting timezone
+
+- `GET` / `PATCH /api/v1/business/profile` return a **plain JSON object** built
+  by `toBusinessProfileResponse()` (`src/business/mappers/business-profile-response.mapper.ts`),
+  so `reportingTimezone` is always a normalized allowlist IANA id (via
+  `resolveReportingTimezone()` in `src/common/utils/timezone.util.ts`).
+- PATCH validates `reportingTimezone` against
+  `REPORTING_TIMEZONE_ALLOWLIST` in `src/common/constants/reporting-timezones.constants.ts`.
+- Column: `business_profile.reporting_timezone` (entity field `reportingTimezone`).
+  Analytics uses the same value for day-boundary logic.
