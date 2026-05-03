@@ -103,6 +103,50 @@ setelah service), supaya serialisasi respons stabil untuk UI.
 - `POST /api/v1/inbox/conversations/:id/ai-resume` — aktifkan lagi AI
 - `POST /api/v1/inbox/conversations/:id/messages` — balasan manual dari dashboard
 
+#### Inbox realtime — SSE + Redis pub/sub (detail)
+
+**Tujuan:** Memberi isyarat ke browser bahwa data inbox mungkin berubah (pesan baru, thread ter-update) **tanpa polling HTTP berkala**. Browser membuka satu koneksi **Server-Sent Events (SSE)** ke API; server mendorong event ringkas ketika ada aktivitas di tenant.
+
+**1) Nama channel Redis**
+
+- Satu channel **per tenant**: **`wabantu:inbox:{tenantId}`** (`tenantId` = UUID tenant dari JWT / session).
+- Dibangun di `src/inbox/inbox-realtime.ts` lewat `CHANNEL_PREFIX = 'wabantu:inbox:'` dan `inboxRedisChannel(tenantId)`.
+- **Publish** (penyiar): siapa pun yang memanggil `publishInboxActivity(redis, tenantId)` mengirim payload JSON ringkas, mis. `{ type: 'inbox', at: <timestamp> }`, ke channel itu (fire-and-forget; error di-swallow agar tidak memutus alur utama).
+
+**2) Siapa yang mem-publish (kapan UI “harus” refresh)?**
+
+- **`src/whatsapp/whatsapp.service.ts`** — setelah pesan masuk dari Meta **berhasil disimpan** ke DB (alur webhook / ingest), memanggil `publishInboxActivity` agar semua tab dashboard tenant itu bisa refetch daftar percakapan & unread.
+- **`src/inbox/inbox.service.ts`** — setelah **`sendHumanMessage`** menyimpan pesan keluar staff ke DB dan memperbarui `lastMessageAt` percakapan, memanggil `publishInboxActivity` agar thread di dashboard lain ikut segar.
+
+Tidak perlu mengirim isi pesan lewat Redis; cukup sinyal “ada perubahan” — UI memanggil ulang REST seperti biasa.
+
+**3) Endpoint SSE — `GET /api/v1/inbox/stream`**
+
+- Handler di `InboxController`: decorator **`@Sse('stream')`** mengembalikan `Observable<MessageEvent>` Nest, bukan JSON biasa.
+- **`@SkipResponseTransform()`** wajib: interceptor global membungkus respons `{ success, true, data }`, yang **merusak** format SSE (`text/event-stream`). Stream ini dilewati transform agar client `EventSource` bisa membaca event.
+- **Auth:** sama seperti route inbox lain — cookie JWT + session Redis; hanya role **owner** / **staff**.
+- Implementasi stream: `inboxActivityStream(redis, tenantId)` di `inbox-realtime.ts`:
+  - Membuka **koneksi Redis duplikat** (`redis.duplicate()`), **SUBSCRIBE** ke `wabantu:inbox:{tenantId}`.
+  - Setiap pesan di channel → `subscriber.next({ data: message })` (isi `data` = string yang sama seperti yang di-publish).
+  - **Ping setiap ~25 detik:** event dengan `data: JSON.stringify({ type: 'ping' })` agar proxy/load balancer tidak menutup koneksi idle terlalu cepat.
+  - Saat client disconnect / observable di-unsubscribe: unsubscribe, hapus listener, `disconnect` pada klien Redis duplikat.
+
+**4) Hubungan dengan frontend (Next.js)**
+
+- Bukan bagian repo API, tetapi kontraknya: browser memakai **`EventSource(url, { withCredentials: true })`** ke path **`/api/v1/inbox/stream`** (atau URL absolut API jika memakai env khusus SSE).
+- Di **`web-frontend`**: hook `use-inbox-activity-stream.ts` + `InboxActivityBridge` di layout dashboard; pada tiap event (kecuali `ping`), **invalidate** cache React Query untuk unread summary, daftar percakapan, dan pesan.
+- **`NEXT_PUBLIC_SSE_API_URL`** (opsional): jika SSE lewat rewrite Next tidak stabil, set base URL langsung ke Nest (mis. `http://localhost:3001/api/v1`); API harus mengizinkan **CORS** + **credentials** untuk origin frontend.
+- **Cadangan:** halaman inbox juga memakai `refetchOnWindowFocus` agar data tetap bisa terbarui jika SSE putus.
+
+**5) File rujukan cepat**
+
+| Bagian | File |
+|--------|------|
+| Channel + publish + stream Observable | `src/inbox/inbox-realtime.ts` |
+| SSE route + skip envelope | `src/inbox/inbox.controller.ts`, `src/common/interceptors/transform.interceptor.ts`, `src/common/decorators/skip-response-transform.decorator.ts` |
+| Subscribe + inject Redis | `src/inbox/inbox.service.ts` (`subscribeInboxStream`, `publishInboxActivity` setelah kirim manual) |
+| Publish setelah pesan masuk WhatsApp | `src/whatsapp/whatsapp.service.ts` |
+
 ### Leads (`LeadsController`)
 - `GET /api/v1/leads` — optional filter `?status=...`
 - `PATCH /api/v1/leads/:id`
