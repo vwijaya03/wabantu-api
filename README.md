@@ -33,6 +33,7 @@ src/
 ├── business/                   # Business profile (per-tenant) + response mapper
 ├── knowledge-base/             # FAQ entries (per-tenant)
 ├── whatsapp/                   # Meta Cloud API + webhook
+├── ai/                         # AI auto-reply queue + internal processor
 ├── inbox/                      # Conversations & messages (human handoff)
 ├── leads/                      # Lead pipeline (status + notes)
 ├── billing/                    # Plans, invoices, subscription overview
@@ -92,7 +93,8 @@ Required for first run:
 Optional but recommended:
 
 - `META_WEBHOOK_VERIFY_TOKEN` — for WhatsApp webhook verification
-- `ANTHROPIC_API_KEY` — when you wire the AI auto-reply pipeline
+- `ANTHROPIC_API_KEY` — generate auto replies
+- `AI_INTERNAL_TOKEN` — shared secret for `ai-worker` -> internal API calls
 
 ## WhatsApp OAuth credentials model (important)
 
@@ -121,6 +123,64 @@ Meta sends **`phone_number_id`** (not the E.164 business number) on inbound webh
 If the channel matched but **`meta_phone_number_id` was missing**, it is **persisted** from the webhook when possible so future lookups are stable.
 
 See `APP_FLOW_GUIDE.md` for OAuth vs webhook ID discovery and troubleshooting.
+
+## AI Auto Reply Engine (BullMQ + separate worker)
+
+Flow:
+
+1. Webhook inbound is ingested and stored to tenant `message` table.
+2. API enqueues BullMQ job `ai-auto-reply` (`jobId = <tenantId>_<inboundMessageId>`).
+3. Separate service `ai-worker` consumes queue and calls:
+   - `POST /api/v1/internal/ai/auto-reply`
+   - `POST /api/v1/internal/ai/auto-reply/fallback` (terminal failures)
+4. API internal processor checks safety rules + tenant config, then sends WhatsApp reply and saves outbound message as `author='ai'`.
+
+Cost-control + business-scope policy:
+
+- If business profile core fields are incomplete, AI LLM is skipped and API sends default CS handoff text.
+- If customer message is non-question, API sends scope-direction text (no LLM). After 3 repeats, sends default CS text.
+- If question is outside registered business scope, API sends out-of-scope text (no LLM). After 3 repeats, sends default CS text.
+- Only in-scope questions proceed to Anthropic generation.
+
+Outbound metadata flags (`message.metadata.reason`):
+
+- `ai_generated` — balasan dibuat oleh Anthropic (LLM path).
+- `profile_incomplete` — profil bisnis belum lengkap, balas default CS (tanpa LLM).
+- `non_question` — chat tidak berupa pertanyaan / tidak nyambung, balas arahan scope atau default CS (tanpa LLM).
+- `out_of_scope` — pertanyaan di luar scope bisnis terdaftar, balas out-of-scope atau default CS (tanpa LLM).
+
+This flag is designed for analytics split between "AI asli" vs "rule-based/default".
+
+Security controls:
+
+- Internal endpoints are `@Public()` but **token-protected** via `x-ai-internal-token` and constant-time comparison.
+- Prompt injection guard rejects known malicious instruction patterns.
+- Customer text is treated as **untrusted data** and bounded/sanitized before prompt assembly.
+- System prompt explicitly forbids revealing secrets or performing infra/database instructions.
+
+Retry + fallback policy:
+
+- BullMQ retry: **4 attempts** total.
+- Backoff: **exponential**, initial delay 5s.
+- When exhausted, worker triggers fallback endpoint so customer gets a safe response and conversation is paused from AI (`aiHandled=false`) for human takeover.
+
+Observability checkpoints:
+
+- Webhook ingress: `WhatsappService` logs inbound ingest + any enqueue warning.
+- Queue publish: `AiQueueService` logs `Queued AI reply job ...`.
+- Worker consume: `ai-worker` logs `Processing AI auto-reply job`.
+- Internal API handoff: `AiInternalController` logs when endpoint is called.
+- Decision path: `AiAutoReplyService` logs skip reason (`aiHandled=false`, `aiEnabled=false`, channel invalid, non-question).
+- LLM call: `AnthropicAiService` logs model/token/context sizes and completion length.
+- Delivery: `AiAutoReplyService` logs WhatsApp send attempt/failure.
+
+Troubleshooting "message masuk tapi AI tidak balas":
+
+1. Confirm API log contains `Queued AI reply job ...`.
+2. Confirm worker log contains `Processing AI auto-reply job`.
+3. If worker shows `API call failed 401`, sync `AI_INTERNAL_TOKEN` between `api/.env` and `ai-worker/.env`.
+4. If API logs `convo.aiHandled=false`, resume AI in inbox first.
+5. If API logs channel/token issue, reconnect WhatsApp channel.
 
 ## Running
 

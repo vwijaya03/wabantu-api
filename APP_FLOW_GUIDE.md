@@ -320,6 +320,72 @@ Payload Meta menyertakan **`phone_number_id`** dan **`display_phone_number`**. R
 
 ---
 
+## 9.1) Alur AI auto-reply dari webhook (terbaru)
+
+Setelah pesan masuk disimpan ke `message` (author=`contact`, direction=`in`), pipeline AI berjalan async:
+
+1. `WhatsappService.ingestInboundMessage()` enqueue BullMQ job lewat `AiQueueService`.
+2. Job masuk queue `ai-auto-reply` dengan `jobId = <tenantId>_<inboundMessageId>` (tanpa `:` karena BullMQ menolak karakter itu pada custom id).
+3. Service terpisah `ai-worker` consume job dari Redis (`BULLMQ_REDIS_DB`).
+4. Worker call endpoint internal API:
+   - `POST /api/v1/internal/ai/auto-reply`
+   - header wajib: `x-ai-internal-token` (harus sama dengan `AI_INTERNAL_TOKEN` API)
+5. `AiAutoReplyService` melakukan guard:
+   - `conversation.aiHandled === true`
+   - `business_profile.aiEnabled === true`
+   - channel `meta_cloud` + status `connected` + token/phone_number_id tersedia
+   - pesan text dari contact
+6. Jika lolos:
+   - greeting sederhana bisa dijawab cepat (tanpa LLM)
+   - pertanyaan produk/harga/stok diproses ke Anthropic (`AnthropicAiService`) dengan konteks:
+     - profil bisnis
+     - FAQ aktif (knowledge base)
+     - memori percakapan terakhir
+7. Guard biaya + relevansi:
+   - jika profil bisnis inti belum lengkap → skip LLM, kirim pesan default bahwa tim CS akan follow-up
+   - jika pesan bukan pertanyaan → arahkan ke scope bisnis (tanpa LLM); setelah 3x tidak nyambung kirim default CS
+   - jika pertanyaan di luar scope bisnis terdaftar → balas out-of-scope (tanpa LLM); setelah 3x kirim default CS
+8. API kirim balasan ke Meta Cloud API, simpan outbound `message` author=`ai`/`system`, update `conversation.lastMessage*`.
+   - metadata `message.metadata.reason` menandai sumber keputusan:
+     - `ai_generated`
+     - `profile_incomplete`
+     - `non_question`
+     - `out_of_scope`
+9. Jika job gagal, BullMQ retry **4 attempts** (exponential backoff, delay awal 5 detik). Jika tetap gagal, worker memanggil fallback endpoint:
+   - `POST /api/v1/internal/ai/auto-reply/fallback`
+   - API kirim pesan fallback aman + set `conversation.aiHandled=false` agar takeover manusia.
+
+Catatan penting:
+
+- Kegagalan enqueue AI **tidak boleh** mematahkan ingestion webhook (dibungkus try/catch).
+- Redis untuk BullMQ wajib `maxmemory-policy noeviction`, bukan `allkeys-lru`.
+- Internal endpoint AI bersifat `@Public()` tetapi tetap aman karena token internal + `timingSafeEqual`.
+
+### Observability checkpoints (log yang harus muncul)
+
+- API:
+  - `Queued AI reply job ...`
+  - `internal auto-reply called tenant=...`
+  - `AI job start tenant=...`
+  - alasan skip bila ada (`aiHandled=false`, `aiEnabled=false`, channel invalid, dll.)
+  - `Anthropic completion received ...` (jika jalur LLM)
+  - `AI job: sending WhatsApp ...`
+- Worker:
+  - `Processing AI auto-reply job`
+  - `API call ok` / `API call failed`
+  - `AI auto-reply job done` atau `failed` + fallback call
+
+### Checklist cepat jika “inbox masuk tapi AI tidak balas”
+
+1. Cek API log ada `Queued AI reply job`.
+2. Cek worker log ada `Processing AI auto-reply job`.
+3. Jika worker `API call failed 401` → sinkronkan `AI_INTERNAL_TOKEN` (`api/.env` = `ai-worker/.env`).
+4. Jika API log `convo.aiHandled=false` → aktifkan lagi AI (`/inbox/conversations/:id/ai-resume`).
+5. Jika API log channel invalid/token kosong → reconnect channel WhatsApp.
+6. Jika Anthropic gagal/retry habis → lihat fallback terkirim dan convo masuk mode handoff manusia.
+
+---
+
 ## 10) Kenapa kadang login sukses tapi balik ke login lagi?
 
 Penyebab paling umum:

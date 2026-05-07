@@ -75,6 +75,7 @@ export interface AiConfig {
   anthropicApiKey: string;
   anthropicModel: string;
   anthropicMaxTokens: number;
+  internalToken: string;
 }
 
 export interface StorageConfig {
@@ -197,6 +198,7 @@ export default (): RootConfig => ({
     anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? '',
     anthropicModel: process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-4-5',
     anthropicMaxTokens: toInt(process.env.ANTHROPIC_MAX_TOKENS, 1024),
+    internalToken: process.env.AI_INTERNAL_TOKEN ?? '',
   },
   storage: {
     driver: (process.env.STORAGE_DRIVER as StorageConfig['driver']) ?? 'local',
