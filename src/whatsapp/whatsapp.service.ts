@@ -328,11 +328,19 @@ export class WhatsappService {
       contact = await contactRepo.save(
         contactRepo.create({
           phoneNumber: normalizedFrom,
-          displayName: null,
+          displayName: inbound.fromDisplayName ?? null,
           notes: null,
           tags: ['new'],
         }),
       );
+    } else if (
+      (!contact.displayName || contact.displayName.trim().length === 0) &&
+      inbound.fromDisplayName &&
+      inbound.fromDisplayName.trim().length > 0
+    ) {
+      // If Meta webhook provides sender name and we haven't stored it yet, persist it.
+      contact.displayName = inbound.fromDisplayName.trim().slice(0, 200);
+      await contactRepo.save(contact);
     }
 
     let convo = await convoRepo.findOne({
@@ -375,6 +383,7 @@ export class WhatsappService {
       contactId: contact.id,
       conversationId: convo.id,
       phoneNumber: contact.phoneNumber,
+      contactName: contact.displayName,
       body: inbound.body,
     });
 
@@ -453,6 +462,7 @@ export class WhatsappService {
       contactId: string;
       conversationId: string;
       phoneNumber: string;
+      contactName: string | null;
       body: string | null;
     },
   ) {
@@ -477,6 +487,13 @@ export class WhatsappService {
       order: { createdAt: 'DESC' },
     });
     if (existing) {
+      if (
+        (!existing.name || existing.name.trim().length === 0) &&
+        input.contactName &&
+        input.contactName.trim().length > 0
+      ) {
+        existing.name = input.contactName.trim().slice(0, 120);
+      }
       existing.metadata = { ...existing.metadata, latestMessage: text };
       await leadRepo.save(existing);
       return;
@@ -494,6 +511,7 @@ export class WhatsappService {
         contactId: input.contactId,
         conversationId: input.conversationId,
         phoneNumber: input.phoneNumber,
+        name: input.contactName ? input.contactName.trim().slice(0, 120) : null,
         status: 'new',
         productInterest: lower.includes('sepatu')
           ? 'sepatu'

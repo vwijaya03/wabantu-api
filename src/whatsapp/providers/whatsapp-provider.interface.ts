@@ -29,6 +29,11 @@ export interface InboundMessage {
    * Used to match `WhatsappChannel.phoneNumber` when `metaPhoneNumberId` was never stored.
    */
   toDisplayPhoneNumber?: string;
+  /**
+   * Optional sender display name (when webhook payload includes it, e.g. Meta
+   * `contacts[].profile.name`).
+   */
+  fromDisplayName?: string | null;
   type: 'text' | 'image' | 'audio' | 'video' | 'document' | 'location';
   body: string | null;
   /** Provider-specific raw payload kept for debugging / replay. */

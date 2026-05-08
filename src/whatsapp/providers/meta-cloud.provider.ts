@@ -14,6 +14,14 @@ interface MetaWebhookEntry {
   changes?: Array<{
     value?: {
       metadata?: { display_phone_number?: string; phone_number_id?: string };
+      contacts?: Array<{
+        wa_id?: string;
+        profile?: {
+          name?: string;
+          first_name?: string;
+          last_name?: string;
+        };
+      }>;
       messages?: Array<{
         id: string;
         from: string;
@@ -85,6 +93,16 @@ export class MetaCloudProvider implements WhatsappProvider {
         const value = change.value;
         const phoneNumberId = value?.metadata?.phone_number_id ?? '';
         const displayPhone = value?.metadata?.display_phone_number;
+        const contactMap = new Map<string, string>();
+        for (const c of value?.contacts ?? []) {
+          const wa = c.wa_id ?? '';
+          const name = c.profile?.name
+            ? c.profile.name
+            : c.profile?.first_name && c.profile?.last_name
+              ? `${c.profile.first_name} ${c.profile.last_name}`
+              : c.profile?.first_name ?? c.profile?.last_name ?? '';
+          if (wa && name.trim()) contactMap.set(wa, name.trim());
+        }
         for (const m of value?.messages ?? []) {
           let body: string | null = null;
           let type: InboundMessage['type'] = 'text';
@@ -122,6 +140,7 @@ export class MetaCloudProvider implements WhatsappProvider {
             fromPhone: m.from,
             toAddress: phoneNumberId,
             toDisplayPhoneNumber: displayPhone,
+            fromDisplayName: contactMap.get(m.from) ?? null,
             type,
             body,
             raw: m,

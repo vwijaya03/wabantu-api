@@ -34,6 +34,18 @@ class HandoffDto {
   reason?: string;
 }
 
+class UpdateContactDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  displayName?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(4000)
+  notes?: string;
+}
+
 @Controller({ path: 'inbox', version: '1' })
 @UseGuards(RolesGuard)
 export class InboxController {
@@ -141,5 +153,24 @@ export class InboxController {
     @Body() body: SendMessageDto,
   ) {
     return this.inbox.sendHumanMessage(user, conversationId, body.body);
+  }
+
+  @Get('contacts/:id')
+  @Roles('owner', 'staff')
+  getContact(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) contactId: string,
+  ) {
+    return this.inbox.getContact(user, contactId);
+  }
+
+  @Patch('contacts/:id')
+  @Roles('owner', 'staff')
+  updateContact(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) contactId: string,
+    @Body() body: UpdateContactDto,
+  ) {
+    return this.inbox.updateContact(user, contactId, body);
   }
 }
