@@ -21,6 +21,7 @@ import { KnowledgeBaseModule } from './knowledge-base/knowledge-base.module';
 import { LeadsModule } from './leads/leads.module';
 import { WhatsappModule } from './whatsapp/whatsapp.module';
 import { AnalyticsModule } from './analytics/analytics.module';
+import { AiModule } from './ai/ai.module';
 
 @Module({
   imports: [
@@ -74,6 +75,7 @@ import { AnalyticsModule } from './analytics/analytics.module';
     InboxModule,
     LeadsModule,
     AnalyticsModule,
+    AiModule,
     BillingModule,
     HealthModule,
   ],

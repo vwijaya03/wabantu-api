@@ -26,6 +26,7 @@ import type { WhatsappProvider } from './providers/whatsapp-provider.interface';
 import type { MetaConnectInitDto } from './dto/meta-connect-init.dto';
 import type { MetaConnectCallbackDto } from './dto/meta-connect-callback.dto';
 import { publishInboxActivity } from '../inbox/inbox-realtime';
+import { AiQueueService } from '../ai/ai-queue.service';
 
 interface MetaOauthStatePayload {
   tenantId: string;
@@ -73,6 +74,7 @@ export class WhatsappService {
   constructor(
     private readonly tenantConn: TenantConnectionService,
     metaCloud: MetaCloudProvider,
+    private readonly aiQueue: AiQueueService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     @InjectRepository(TenantCompany)
     private readonly tenantCompanyRepo: Repository<TenantCompany>,
@@ -375,6 +377,20 @@ export class WhatsappService {
       phoneNumber: contact.phoneNumber,
       body: inbound.body,
     });
+
+    // AI auto-reply should never break webhook ingestion.
+    try {
+      await this.aiQueue.enqueueAutoReply({
+        tenantId,
+        conversationId: convo.id,
+        inboundMessageId: msg.id,
+        inboundType: inbound.type,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Failed enqueue AI auto-reply for inbound=${inbound.externalId}: ${(err as Error).message}`,
+      );
+    }
   }
 
   private async resolveTenantByInboundAddress(

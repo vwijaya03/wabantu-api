@@ -81,6 +81,7 @@ export const envValidationSchema = Joi.object({
   ANTHROPIC_API_KEY: Joi.string().allow('').default(''),
   ANTHROPIC_MODEL: Joi.string().default('claude-sonnet-4-5'),
   ANTHROPIC_MAX_TOKENS: Joi.number().min(1).default(1024),
+  AI_INTERNAL_TOKEN: Joi.string().allow('').default(''),
 
   // Storage
   STORAGE_DRIVER: Joi.string().valid('local', 's3').default('local'),
