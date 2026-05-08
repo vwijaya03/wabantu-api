@@ -12,6 +12,7 @@ import { TenantConnectionService } from '../database/tenant/tenant-connection.se
 import { Contact } from '../database/tenant/entities/contact.entity';
 import { Conversation } from '../database/tenant/entities/conversation.entity';
 import { Message } from '../database/tenant/entities/message.entity';
+import { Lead } from '../database/tenant/entities/lead.entity';
 import { WhatsappChannel } from '../database/tenant/entities/whatsapp-channel.entity';
 import type { AuthUser } from '../common/types/request.types';
 import { REDIS_CLIENT } from '../redis/redis.module';
@@ -72,6 +73,7 @@ export class InboxService {
       contactRepo: ds.getRepository(Contact),
       msgRepo: ds.getRepository(Message),
       channelRepo: ds.getRepository(WhatsappChannel),
+      leadRepo: ds.getRepository(Lead),
     };
   }
 
@@ -419,7 +421,7 @@ export class InboxService {
     contactId: string,
     input: { displayName?: string; notes?: string },
   ) {
-    const { contactRepo } = await this.repos(user.tenantId);
+    const { contactRepo, leadRepo } = await this.repos(user.tenantId);
     const contact = await contactRepo.findOne({ where: { id: contactId } });
     if (!contact) throw new NotFoundException('Kontak tidak ditemukan');
 
@@ -433,6 +435,15 @@ export class InboxService {
     }
 
     await contactRepo.save(contact);
+
+    // Keep lead.name in sync with the canonical contact display name.
+    if (typeof input.displayName === 'string') {
+      await leadRepo.update(
+        { contactId },
+        { name: contact.displayName ? contact.displayName.slice(0, 120) : null },
+      );
+    }
+
     return {
       id: contact.id,
       phoneNumber: contact.phoneNumber,
