@@ -400,4 +400,45 @@ export class InboxService {
 
     return saved;
   }
+
+  async getContact(user: AuthUser, contactId: string) {
+    const { contactRepo } = await this.repos(user.tenantId);
+    const contact = await contactRepo.findOne({ where: { id: contactId } });
+    if (!contact) throw new NotFoundException('Kontak tidak ditemukan');
+    return {
+      id: contact.id,
+      phoneNumber: contact.phoneNumber,
+      displayName: contact.displayName,
+      notes: contact.notes,
+      tags: contact.tags,
+    };
+  }
+
+  async updateContact(
+    user: AuthUser,
+    contactId: string,
+    input: { displayName?: string; notes?: string },
+  ) {
+    const { contactRepo } = await this.repos(user.tenantId);
+    const contact = await contactRepo.findOne({ where: { id: contactId } });
+    if (!contact) throw new NotFoundException('Kontak tidak ditemukan');
+
+    if (typeof input.displayName === 'string') {
+      const v = input.displayName.trim();
+      contact.displayName = v.length ? v : null;
+    }
+    if (typeof input.notes === 'string') {
+      const v = input.notes.trim();
+      contact.notes = v.length ? v : null;
+    }
+
+    await contactRepo.save(contact);
+    return {
+      id: contact.id,
+      phoneNumber: contact.phoneNumber,
+      displayName: contact.displayName,
+      notes: contact.notes,
+      tags: contact.tags,
+    };
+  }
 }

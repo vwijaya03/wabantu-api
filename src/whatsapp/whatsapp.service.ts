@@ -328,11 +328,19 @@ export class WhatsappService {
       contact = await contactRepo.save(
         contactRepo.create({
           phoneNumber: normalizedFrom,
-          displayName: null,
+          displayName: inbound.fromDisplayName ?? null,
           notes: null,
           tags: ['new'],
         }),
       );
+    } else if (
+      (!contact.displayName || contact.displayName.trim().length === 0) &&
+      inbound.fromDisplayName &&
+      inbound.fromDisplayName.trim().length > 0
+    ) {
+      // If Meta webhook provides sender name and we haven't stored it yet, persist it.
+      contact.displayName = inbound.fromDisplayName.trim().slice(0, 200);
+      await contactRepo.save(contact);
     }
 
     let convo = await convoRepo.findOne({
